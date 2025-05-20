@@ -1,0 +1,20 @@
+---
+- name: Fully patch Ubuntu system
+  hosts: all
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Perform full patching
+      package:
+        name: '*'
+        state: latest
+
+    - name: Reboot if needed
+      reboot:
+        msg: "Rebooting after patching"
+        pre_reboot_delay: 10
+        post_reboot_delay: 30
+        reboot_timeout: 600
