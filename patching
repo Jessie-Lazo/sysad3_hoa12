@@ -2,11 +2,15 @@
 - name: Harden Ubuntu system on first boot
   hosts: all
   become: true
+
   vars:
-    new_username: secureadmin         # Task 2 user
-    admin_user: admin                 # Task 3 user
+    new_username: secureadmin
+    admin_user: admin
     user_password: "{{ 'YourPasswordHere' | password_hash('sha512') }}"
     local_public_key_path: "{{ lookup('env','HOME') + '/.ssh/id_rsa.pub' }}"
+    allowed_ssh_networks:
+      - 192.168.1.0/24
+      - 203.0.113.42/32
 
   tasks:
     # --- Task 1: Patching ---
@@ -24,6 +28,20 @@
         pre_reboot_delay: 10
         post_reboot_delay: 30
         reboot_timeout: 600
+
+    # --- Task: Disable unused services ---
+    - name: Disable and stop unused services
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+        state: stopped
+      loop:
+        - cups
+        - avahi-daemon
+        - snapd
+        - bluetooth
+        - rpcbind
+      ignore_errors: yes
 
     # --- Task 2: Secure SSH Access ---
     - name: Create a new user with sudo privileges
@@ -55,12 +73,7 @@
         state: present
         backup: yes
 
-    - name: Restart SSH service
-      service:
-        name: ssh
-        state: restarted
-
-    # --- Task 3: Create admin user and setup SSH key ---
+    # --- Task 3: Create admin user and SSH setup ---
     - name: Ensure group 'admin' exists
       group:
         name: "{{ admin_user }}"
@@ -103,3 +116,78 @@
         owner: root
         group: root
         mode: '0440'
+
+    # --- Task 4: Enforce known-good SSH config ---
+    - name: Deploy hardened SSH config
+      copy:
+        src: files/sshd_config
+        dest: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: '0600'
+        backup: yes
+      notify: Restart SSH
+
+    # --- Task 5: Restrict SSH to allowed IPs using firewalld ---
+    - name: Move SSH service to the internal zone
+      firewalld:
+        service: ssh
+        zone: internal
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Remove SSH service from default zone (public)
+      firewalld:
+        service: ssh
+        zone: public
+        permanent: yes
+        state: disabled
+        immediate: yes
+
+    - name: Allow SSH access only from allowed IP addresses in internal zone
+      firewalld:
+        zone: internal
+        source: "{{ item }}"
+        state: enabled
+        permanent: yes
+        immediate: yes
+      with_items: "{{ allowed_ssh_networks }}"
+
+    # --- Task 6: Set login banner and MOTD ---
+    - name: Set login banner (/etc/issue.net)
+      copy:
+        dest: /etc/issue.net
+        content: |
+          ******************************************************************
+          * WARNING: Unauthorized access to this system is prohibited.    *
+          * All activity may be monitored and reported.                   *
+          * By logging in, you agree to comply with company policies.     *
+          ******************************************************************
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Configure SSH to display the login banner
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^Banner'
+        line: 'Banner /etc/issue.net'
+        state: present
+      notify: Restart SSH
+
+    - name: Set message of the day (/etc/motd)
+      copy:
+        dest: /etc/motd
+        content: |
+          Authorized users only. All activity is logged and monitored.
+          Compliance with the company acceptable use policy is mandatory.
+        owner: root
+        group: root
+        mode: '0644'
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: ssh
+        state: restarted
