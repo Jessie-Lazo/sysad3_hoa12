@@ -1,20 +1,59 @@
 ---
-- name: Fully patch Ubuntu system
+- name: Harden Ubuntu system on first boot
   hosts: all
   become: true
+  vars:
+    new_username: secureadmin  # Change this
+    user_password: "{{ 'YourPasswordHere' | password_hash('sha512') }}"  # Change this
+
   tasks:
-    - name: Update apt cache
+    # --- Task 1: Patching ---
+    - name: Update apt package cache
       apt:
         update_cache: yes
 
-    - name: Perform full patching
-      package:
-        name: '*'
-        state: latest
+    - name: Upgrade all packages to latest versions
+      apt:
+        upgrade: dist
 
-    - name: Reboot if needed
+    - name: Reboot the system after patching
       reboot:
         msg: "Rebooting after patching"
         pre_reboot_delay: 10
         post_reboot_delay: 30
         reboot_timeout: 600
+
+    # --- Task 2: Secure SSH Access ---
+    - name: Create a new user with sudo privileges
+      user:
+        name: "{{ new_username }}"
+        groups: sudo
+        append: yes
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Set password for the new user
+      user:
+        name: "{{ new_username }}"
+        password: "{{ user_password }}"
+
+    - name: Allow passwordless sudo (optional)
+      copy:
+        dest: "/etc/sudoers.d/{{ new_username }}"
+        content: "{{ new_username }} ALL=(ALL) NOPASSWD:ALL"
+        owner: root
+        group: root
+        mode: '0440'
+
+    - name: Disable root login via SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+        state: present
+        backup: yes
+
+    - name: Restart SSH service
+      service:
+        name: ssh
+        state: restarted
