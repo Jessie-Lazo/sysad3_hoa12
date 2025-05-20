@@ -3,8 +3,10 @@
   hosts: all
   become: true
   vars:
-    new_username: secureadmin  # Change this
-    user_password: "{{ 'YourPasswordHere' | password_hash('sha512') }}"  # Change this
+    new_username: secureadmin         # Task 2 user
+    admin_user: admin                 # Task 3 user
+    user_password: "{{ 'YourPasswordHere' | password_hash('sha512') }}"
+    local_public_key_path: "{{ lookup('env','HOME') + '/.ssh/id_rsa.pub' }}"
 
   tasks:
     # --- Task 1: Patching ---
@@ -37,7 +39,7 @@
         name: "{{ new_username }}"
         password: "{{ user_password }}"
 
-    - name: Allow passwordless sudo (optional)
+    - name: Allow passwordless sudo for secure user
       copy:
         dest: "/etc/sudoers.d/{{ new_username }}"
         content: "{{ new_username }} ALL=(ALL) NOPASSWD:ALL"
@@ -57,3 +59,47 @@
       service:
         name: ssh
         state: restarted
+
+    # --- Task 3: Create admin user and setup SSH key ---
+    - name: Ensure group 'admin' exists
+      group:
+        name: "{{ admin_user }}"
+        state: present
+
+    - name: Create the admin user and add to sudo and admin group
+      user:
+        name: "{{ admin_user }}"
+        groups: sudo,{{ admin_user }}
+        append: yes
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Read SSH public key from local machine
+      delegate_to: localhost
+      run_once: true
+      set_fact:
+        admin_ssh_key: "{{ lookup('file', local_public_key_path) }}"
+
+    - name: Create .ssh directory for admin user
+      file:
+        path: "/home/{{ admin_user }}/.ssh"
+        state: directory
+        owner: "{{ admin_user }}"
+        group: "{{ admin_user }}"
+        mode: '0700'
+
+    - name: Add authorized SSH key for admin user
+      copy:
+        content: "{{ admin_ssh_key }}"
+        dest: "/home/{{ admin_user }}/.ssh/authorized_keys"
+        owner: "{{ admin_user }}"
+        group: "{{ admin_user }}"
+        mode: '0600'
+
+    - name: Allow passwordless sudo for admin user
+      copy:
+        dest: "/etc/sudoers.d/{{ admin_user }}"
+        content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL"
+        owner: root
+        group: root
+        mode: '0440'
